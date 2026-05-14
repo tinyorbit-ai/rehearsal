@@ -7,17 +7,22 @@
   "license": "MIT",
   "author": "TinyOrbit (https://tinyorbit.ai)",
   "scripts": {
-    "dev": "next dev",
     "build": "next build",
+    "dev": "next dev",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^3.0.112",
     "@huggingface/transformers": "^4.2.0",
+    "@opennextjs/cloudflare": "^1.19.10",
     "ai": "^6.0.177",
     "next": "16.2.6",
     "pdf-parse": "^2.4.5",
@@ -41,6 +46,7 @@
     "jsdom": "^29.1.1",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.6",
+    "wrangler": "^4.91.0"
   }
 }
