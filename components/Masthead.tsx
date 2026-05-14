@@ -19,7 +19,7 @@ export function Masthead({ view }: { view: View }) {
         <div className="flex items-baseline justify-between gap-6">
           <div className="reveal reveal-1">
             <div className="kicker flex items-center gap-3">
-              <span>Interview prep</span>
+              <span>Delivery practice</span>
               <span className="h-px w-6 bg-[var(--color-paper-3)]/50" />
               <span className="tnum">{issueDate}</span>
             </div>
@@ -27,7 +27,7 @@ export function Masthead({ view }: { view: View }) {
               The Rehearsal
             </h1>
             <p className="mt-1 text-[14px] text-[var(--color-paper-2)]">
-              Rehearse your interview. Hone your delivery.
+              Rehearse your next talk, pitch, or interview. Hone your delivery.
             </p>
           </div>
 

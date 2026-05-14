@@ -2,6 +2,7 @@
 
 import { VideoFrame } from "./VideoFrame";
 import { Vitals } from "./Vitals";
+import { AudioMeter } from "./AudioMeter";
 import type { StatsSnapshot } from "@/lib/stats";
 import type { ModelStatus } from "@/lib/transcription";
 
@@ -34,15 +35,13 @@ export function Recording({
 }) {
   const modelLine =
     modelStatus === "loading"
-      ? `Loading whisper-tiny${loadFile ? ` · ${loadFile}` : ""}${loadProgress ? ` · ${loadProgress.toFixed(0)}%` : ""}`
+      ? `Loading distil-medium.en${loadFile ? ` · ${loadFile}` : ""}${loadProgress ? ` · ${loadProgress.toFixed(0)}%` : ""}`
       : modelStatus === "ready"
-        ? `Listening · whisper-tiny on ${modelBackend ?? "wasm"}`
+        ? `Listening · distil-medium.en on ${modelBackend ?? "wasm"}`
         : modelStatus === "error"
           ? "Transcription unavailable"
           : "Initializing…";
 
-  // Effective caption to render: error message if model failed, model
-  // status while still loading, otherwise the live caption text.
   const captionContent =
     modelStatus === "error" && transcriptionError ? (
       <span className="text-[var(--color-oxblood)]">
@@ -51,7 +50,7 @@ export function Recording({
     ) : modelStatus !== "ready" ? (
       <span className="text-[var(--color-paper-3)]">
         {modelStatus === "loading"
-          ? `Loading speech model… ${loadFile ?? ""}${loadProgress ? ` ${loadProgress.toFixed(0)}%` : ""}`
+          ? `Downloading speech model · ${loadFile ?? "…"}${loadProgress ? ` · ${loadProgress.toFixed(0)}%` : ""}`
           : "Initializing…"}
       </span>
     ) : (
@@ -112,40 +111,6 @@ export function Recording({
         </div>
       </div>
     </section>
-  );
-}
-
-function AudioMeter({ rms }: { rms: number }) {
-  // Map RMS (typically 0–0.3 for speech) to a 0–1 fill, then clamp.
-  const level = Math.min(1, Math.max(0, rms / 0.25));
-  const bars = 12;
-  const lit = Math.round(level * bars);
-  return (
-    <span className="flex items-center gap-2 shrink-0">
-      <span>Mic</span>
-      <span className="flex items-end gap-[2px] h-3">
-        {Array.from({ length: bars }, (_, i) => {
-          const isLit = i < lit;
-          const color =
-            i < bars * 0.5
-              ? "var(--color-brass)"
-              : i < bars * 0.85
-                ? "var(--color-paper)"
-                : "var(--color-oxblood)";
-          return (
-            <span
-              key={i}
-              className="w-[3px] rounded-[1px]"
-              style={{
-                height: `${30 + i * 6}%`,
-                background: isLit ? color : "var(--color-ink-2)",
-                transition: "background 80ms linear",
-              }}
-            />
-          );
-        })}
-      </span>
-    </span>
   );
 }
 

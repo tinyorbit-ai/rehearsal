@@ -1,8 +1,12 @@
-# Interview Prep — "The Rehearsal"
+# The Rehearsal
 
-Webcam-based interview rehearsal tool. Record yourself answering questions,
-get live captions + delivery stats while you talk, and a structured LLM
-critique after.
+Webcam-based delivery rehearsal tool. Record yourself rehearsing — a
+conference talk, presentation, sales pitch, job interview, or anything
+else — and get live captions + delivery stats while you talk, plus a
+structured LLM critique after. The Preparation step asks "What are you
+rehearsing for?" via a `kind` dropdown (`presentation | pitch | interview
+| other`) and accepts a freeform brief plus one supporting-material
+upload (slides outline, JD, CV, prep notes — anything).
 
 ## Status
 
@@ -15,26 +19,26 @@ storage.
 ## Architecture
 
 ```
-┌─ Browser (client-only recording) ─────────────────────────────┐
+┌─ Browser (transcription is 100% on-device) ───────────────────┐
 │  getUserMedia ─┬─ MediaRecorder(video+audio) ─→ Blob ─→ DL    │
 │                ├─ MediaRecorder(audio only) ──→ Blob ─→ DL    │
 │                └─ AudioWorklet (16kHz PCM + RMS) ─┐           │
 │                                                   ▼           │
-│  Web Worker: transformers.js Whisper-tiny.en (WebGPU/WASM)    │
+│  Web Worker: transformers.js                                  │
+│    distil-whisper/distil-medium.en (WebGPU → WASM fallback)   │
 │                       │                                       │
-│                       ▼                                       │
 │  Live captions + LocalWindow[] + RMS samples                  │
-│                       │                                       │
-│  Stats engine (30s tick): WPM, filler %, pauses, volatility   │
+│  Stats engine (10s tick): WPM, filler %, pauses, volatility   │
 │                                                               │
-│  STOP → POST audio Blob → /api/transcribe ─→ Groq Whisper-v3  │
+│  STOP → decodeAudioData → OfflineAudioContext(16kHz mono)     │
+│       → worker.transcribeFull → timestamped segments          │
 │       → POST transcript+context → /api/analyze ─→ AI Gateway  │
 └───────────────────────────────────────────────────────────────┘
 ```
 
-Files (video + audio) never leave the browser. Only the audio blob is
-sent to Groq for the post-stop accurate transcript, and the text
-transcript + optional context (goal/JD/CV/prep doc) is sent to the LLM.
+Audio + video never leave the browser. The ONLY network call is
+`/api/analyze` (Vercel AI Gateway, sends transcript text + optional
+context). Transcription runs entirely on-device via WebGPU.
 
 ## Stack
 
@@ -46,7 +50,9 @@ transcript + optional context (goal/JD/CV/prep doc) is sent to the LLM.
 - **Tailwind v4** with `@theme` design tokens
 - **Geist Sans** (everything) + **JetBrains Mono** (numbers, kicker labels)
   via `next/font/google`. Single-family by design.
-- **`@huggingface/transformers` v4** — Whisper-tiny.en in a Web Worker
+- **`@huggingface/transformers` v4** — `onnx-community/distil-medium.en`
+  in a Web Worker. Used for BOTH live captions (4s sliding windows) and
+  the timestamped final transcript on Stop. ~400MB first-load, cached.
 - **`ai` v6** + **`@ai-sdk/gateway`** — final LLM analysis (model
   selectable via env string)
 - **`zod`** — schema for structured LLM output
@@ -57,9 +63,8 @@ transcript + optional context (goal/JD/CV/prep doc) is sent to the LLM.
 Copy `.env.example` to `.env.local` and fill in:
 
 ```bash
-AI_GATEWAY_API_KEY=...        # Vercel AI Gateway
+AI_GATEWAY_API_KEY=...        # Vercel AI Gateway — the only network call
 ANALYSIS_MODEL=openai/gpt-5.5 # change string to swap model
-GROQ_API_KEY=...              # cloud transcription
 ```
 
 The model string format is `provider/model`. Pulling from AI Gateway
@@ -71,8 +76,7 @@ means you only change one env var to swap models. Examples:
 | Route | Purpose |
 |---|---|
 | `app/page.tsx` | Single-page state machine: setup → recording → analysis |
-| `app/api/transcribe/route.ts` | POST audio file → Groq Whisper-large-v3-turbo → segments with timestamps + avg_logprob |
-| `app/api/analyze/route.ts` | POST `{transcript, segments, durationSec, goal?, jd?, cvText?, prepText?, stats?, model?}` → Vercel AI Gateway with Zod-validated structured output |
+| `app/api/analyze/route.ts` | POST `{transcript, segments, durationSec, kind?, goal?, brief?, materialText?, stats?, model?}` → Vercel AI Gateway with Zod-validated structured output. `kind` tunes the coach preamble; STAR arc only set for `interview` |
 | `app/api/parse-file/route.ts` | POST file (pdf/md/txt) → `{ text }` |
 
 ## Components
@@ -85,7 +89,7 @@ components/
   Analysis.tsx      — loading/error states + final feedback layout
   VideoFrame.tsx    — shared 16:9 frame, REC chrome, captions overlay
   Vitals.tsx        — stats sidebar, idle/live, action button
-  Preparation.tsx   — goal / JD / CV / prep doc form (with file upload)
+  Preparation.tsx   — "What are you rehearsing for?" — kind dropdown, title, brief textarea, single supporting-material file upload
 ```
 
 ```
@@ -121,47 +125,58 @@ Defined in `app/globals.css` `@theme`. Use these — no ad-hoc colors.
 ## Dev commands
 
 ```bash
-pnpm dev               # Matt runs this — start dev server (Turbopack)
+pnpm dev               # start dev server (Turbopack)
 pnpm next build        # production build sanity check
 pnpm tsc --noEmit      # type check
 pnpm lint              # eslint
+pnpm test:run          # unit + integration tests (Vitest)
+pnpm test:e2e          # browser tests (Playwright, needs Chromium)
 ```
 
 ## How the live caption pipeline works
 
 1. `getUserMedia` returns a MediaStream with video + audio tracks
-2. The audio track is fed into an `AudioContext({ sampleRate: 16000 })`
-   which is connected to an AudioWorklet (`/public/audio-worklet.js`)
-3. The worklet emits ~250ms PCM chunks + RMS values to the main thread
-4. `useTranscription` maintains a 6-second rolling buffer at 16kHz
-5. Every 2 seconds, the most recent 4-second window is sent to a Web
-   Worker running transformers.js Whisper-tiny.en
-6. The worker returns the text; the main thread updates `caption` state
-   and appends a `LocalWindow` for the stats engine
-7. `useStats` computes WPM (avg words-per-second × 60 across recent
-   windows), filler ratio (regex), long pauses (RMS-silence runs > 2s),
-   volatility (stdev of WPS) every 30 seconds and emits a `StatsSnapshot`
+2. The audio track is *cloned* (so MediaRecorder and AudioContext don't
+   compete on the same track) and fed into an
+   `AudioContext({ sampleRate: 16000 })` connected to an AudioWorklet
+   at `/public/audio-worklet.js`
+3. Worklet → muted gain → destination (required: Web Audio prunes
+   worklet nodes without a path to destination)
+4. The worklet emits ~250ms PCM chunks + RMS to the main thread
+5. `useTranscription` maintains a 6-second rolling buffer
+6. Every 2 seconds, the most recent 4-second window is sent to the
+   worker; transformers.js distil-medium.en returns text
+7. `useStats` computes WPM / filler % / pauses / volatility every 10s
+   from `LocalWindow[]` and `rmsSamples[]`
 
 ## How the post-stop pipeline works
 
-1. User presses Stop. MediaRecorder fires `onstop`, the recorder hook
-   produces a `Blob` for video and a separate one for audio
-2. The page transitions to the Analysis view immediately. Download
-   chips work right away (object URLs). The pipeline shows a 2-step
-   loading indicator.
-3. The audio blob is POSTed to `/api/transcribe`, which forwards to
-   Groq Whisper-large-v3-turbo with `verbose_json`. Returns timestamped
-   segments with `avg_logprob`.
-4. The transcript + optional context + final stats snapshot are POSTed
-   to `/api/analyze`. The route uses `generateObject` from the AI SDK
-   with the Zod `feedbackSchema` and the model string from env.
-5. The Analysis screen renders feedback when the call completes.
+1. User presses Stop. `recorder.stop()` returns a Promise resolving to
+   `{ videoBlob, audioBlob, ... }` once both MediaRecorders fire `onstop`
+2. The page transitions to Analysis. Download chips work immediately.
+3. `transcription.transcribeFull(audioBlob)`:
+   a. Decodes the blob via `decodeAudioData`
+   b. Renders to 16kHz mono PCM via `OfflineAudioContext`
+   c. Posts to the worker with `transcribeFull` (return_timestamps: true)
+   d. Returns `{ text, duration, segments: [{ start, end, text }] }`
+4. The transcript + optional context + final stats are POSTed to
+   `/api/analyze`. The route uses `generateObject` with the Zod
+   `feedbackSchema` and the model string from env.
+5. The Transcript section renders the moment step 3 completes; the
+   analysis renders when step 4 completes.
+
+Note: transformers.js's pipeline doesn't expose per-segment
+`avg_logprob`, so the confidence-tier highlighting we built only fires
+when segments arrive with logprobs (none do today). The Transcript
+component auto-hides the legend in that case.
 
 ## Gotchas (real ones, hit during build)
 
 - **Cactus has no browser SDK and no documented Cloud HTTP transcription
-  API.** Picked Groq Whisper-large-v3-turbo as the cloud tier.
-  The `/api/transcribe` boundary is identical, swap providers freely.
+  API.** Tried Groq for a post-stop cloud pass; abandoned it in favour
+  of running `distil-medium.en` locally for both live captions and the
+  final transcript. The app is now 100% on-device for transcription.
+  Only `/api/analyze` (the LLM) is networked.
 - **Tailwind v4 syntax** — `@theme` block in `globals.css`, no
   `tailwind.config.ts` needed.
 - **next/font subsetting** — Fraunces was tried and dropped (too

@@ -15,8 +15,9 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "The Rehearsal — interview prep",
-  description: "Rehearse your interview. Hone your delivery.",
+  title: "The Rehearsal — practice your delivery",
+  description:
+    "Rehearse your next talk, pitch, or interview. Live captions, delivery stats, structured AI feedback.",
 };
 
 export default function RootLayout({

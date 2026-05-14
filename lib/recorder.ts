@@ -38,9 +38,13 @@ export type UseRecorderReturn = {
   stop: () => Promise<StopResult>;
   reset: () => void;
   release: () => void;
+  /** Stops camera + mic tracks (kills the in-use indicator) but keeps the
+   *  recorded blobs and download URLs alive. Used after stop() so the camera
+   *  light turns off while the user reads the analysis. */
+  releaseCamera: () => void;
 };
 
-function pickMime(candidates: string[]) {
+export function pickMime(candidates: string[]) {
   for (const m of candidates) {
     if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(m)) {
       return m;
@@ -259,6 +263,13 @@ export function useRecorder(): UseRecorderReturn {
     setState("idle");
   }
 
+  function releaseCamera() {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setStream(null);
+    setAudioStream(null);
+  }
+
   // Cleanup on unmount — synchronizing with browser resources, legit effect.
   useEffect(() => {
     return () => {
@@ -294,6 +305,7 @@ export function useRecorder(): UseRecorderReturn {
     stop,
     reset,
     release,
+    releaseCamera,
   };
 }
 

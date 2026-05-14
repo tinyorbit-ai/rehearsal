@@ -2,15 +2,20 @@
 
 import { useState } from "react";
 import { Masthead } from "@/components/Masthead";
+import { ModelStatusBar } from "@/components/ModelStatusBar";
+import { SupportWarning } from "@/components/SupportWarning";
 import { Setup } from "@/components/Setup";
 import { Recording } from "@/components/Recording";
 import { Analysis, type AnalysisStatus } from "@/components/Analysis";
+import { useBrowserSupport } from "@/lib/browser-support";
+import { useShortcuts } from "@/lib/use-shortcuts";
 import { useRecorder, formatElapsed } from "@/lib/recorder";
 import { useTranscription } from "@/lib/transcription";
 import { useStats, EMPTY_STATS } from "@/lib/stats";
 import { EMPTY_PREP, type Prep } from "@/components/Preparation";
 import type { Feedback } from "@/lib/feedback-schema";
-import type { TranscribeResponse } from "@/app/api/transcribe/route";
+import { feedbackToMarkdown } from "@/lib/markdown";
+import type { TranscribeResponse } from "@/lib/transcription";
 
 type View = "setup" | "recording" | "analysis";
 
@@ -26,7 +31,12 @@ export default function Page() {
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [stoppedStats, setStoppedStats] = useState(EMPTY_STATS);
   const [stoppedDurationSec, setStoppedDurationSec] = useState(0);
+  const [uploadedVideo, setUploadedVideo] = useState<{
+    url: string;
+    mime: string;
+  } | null>(null);
 
+  const support = useBrowserSupport();
   const recorder = useRecorder();
   const transcription = useTranscription();
   const { snapshot: stats, lastUpdateAgoSec } = useStats({
@@ -69,6 +79,10 @@ export default function Page() {
       return;
     }
     setStoppedDurationSec(stopResult.durationSec);
+    // Camera/mic are no longer needed for the rest of the analysis flow —
+    // release the hardware indicator immediately so the user knows the
+    // camera is off while they read the review.
+    recorder.releaseCamera();
 
     if (!stopResult.audioBlob || stopResult.audioBlob.size === 0) {
       setAnalysisError(
@@ -80,21 +94,8 @@ export default function Page() {
 
     let transcribed: TranscribeResponse;
     try {
-      const form = new FormData();
-      const ext = stopResult.audioMime?.includes("mp4") ? "mp4" : "webm";
-      form.set(
-        "file",
-        new File([stopResult.audioBlob], `audio.${ext}`, {
-          type: stopResult.audioMime || "audio/webm",
-        }),
-      );
-      const res = await fetch("/api/transcribe", { method: "POST", body: form });
-      const data = (await res.json()) as TranscribeResponse | { error: string };
-      if (!res.ok || "error" in data) {
-        throw new Error(("error" in data && data.error) || `Transcribe ${res.status}`);
-      }
-      transcribed = data;
-      setTranscript(data);
+      transcribed = await transcription.transcribeFull(stopResult.audioBlob);
+      setTranscript(transcribed);
     } catch (err) {
       setAnalysisError(`Transcription failed: ${(err as Error).message}`);
       setAnalysisStatus("error");
@@ -110,10 +111,10 @@ export default function Page() {
           transcript: transcribed.text,
           segments: transcribed.segments,
           durationSec: transcribed.duration || stopResult.durationSec,
+          kind: prep.kind,
           goal: prep.goal || undefined,
-          jd: prep.jd || undefined,
-          cvText: prep.cvText || undefined,
-          prepText: prep.prepText || undefined,
+          brief: prep.brief || undefined,
+          materialText: prep.materialText || undefined,
           stats: stats.takenAt
             ? {
                 wpm: stats.wpm,
@@ -140,9 +141,71 @@ export default function Page() {
     }
   }
 
-  function handleRetake() {
-    recorder.reset();
+  async function handleUpload(file: File) {
+    // Skip the live recording path entirely. The uploaded video becomes the
+    // source-of-truth for both the Replay player and the post-stop pipeline.
+    if (recorder.stream) recorder.releaseCamera();
     transcription.reset();
+
+    const mime = file.type || "video/mp4";
+    if (uploadedVideo) URL.revokeObjectURL(uploadedVideo.url);
+    const url = URL.createObjectURL(file);
+    setUploadedVideo({ url, mime });
+    setStoppedStats(EMPTY_STATS);
+
+    setFeedback(null);
+    setTranscript(null);
+    setAnalysisError(null);
+    setAnalysisStatus("transcribing");
+    setView("analysis");
+
+    let transcribed: TranscribeResponse;
+    try {
+      transcribed = await transcription.transcribeFull(file);
+      setTranscript(transcribed);
+    } catch (err) {
+      setAnalysisError(`Transcription failed: ${(err as Error).message}`);
+      setAnalysisStatus("error");
+      return;
+    }
+    setStoppedDurationSec(transcribed.duration);
+
+    setAnalysisStatus("analyzing");
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript: transcribed.text,
+          segments: transcribed.segments,
+          durationSec: transcribed.duration,
+          kind: prep.kind,
+          goal: prep.goal || undefined,
+          brief: prep.brief || undefined,
+          materialText: prep.materialText || undefined,
+        }),
+      });
+      const data = (await res.json()) as
+        | { feedback: Feedback; modelLabel: string; generatedAt: string }
+        | { error: string };
+      if (!res.ok || "error" in data) {
+        throw new Error(("error" in data && data.error) || `Analyze ${res.status}`);
+      }
+      setFeedback(data.feedback);
+      setModelLabel(data.modelLabel);
+      setGeneratedAt(data.generatedAt);
+      setAnalysisStatus("ready");
+    } catch (err) {
+      setAnalysisError(`Analysis failed: ${(err as Error).message}`);
+      setAnalysisStatus("error");
+    }
+  }
+
+  function handleRetake() {
+    recorder.release();
+    transcription.reset();
+    if (uploadedVideo) URL.revokeObjectURL(uploadedVideo.url);
+    setUploadedVideo(null);
     setFeedback(null);
     setTranscript(null);
     setAnalysisError(null);
@@ -155,9 +218,29 @@ export default function Page() {
     navigator.clipboard.writeText(md);
   }
 
+  useShortcuts({
+    view,
+    recorderBusy: recorder.state === "requesting",
+    onStart: handleStart,
+    onStop: handleStop,
+    onRetake: handleRetake,
+  });
+
   return (
     <main className="relative">
       <Masthead view={view} />
+      <SupportWarning report={support} />
+      <ModelStatusBar
+        status={transcription.status}
+        backend={transcription.backend}
+        loadProgress={transcription.loadProgress}
+        loadFile={transcription.loadFile}
+        loadBytesDone={transcription.loadBytesDone}
+        loadBytesTotal={transcription.loadBytesTotal}
+        loadFilesDone={transcription.loadFilesDone}
+        loadFilesSeen={transcription.loadFilesSeen}
+        error={transcription.error}
+      />
       {view === "setup" && (
         <Setup
           recorderState={recorder.state}
@@ -166,6 +249,7 @@ export default function Page() {
           prep={prep}
           onPrepChange={setPrep}
           onStart={handleStart}
+          onUpload={handleUpload}
         />
       )}
       {view === "recording" && (
@@ -188,17 +272,18 @@ export default function Page() {
         <Analysis
           status={analysisStatus}
           error={analysisError}
-          videoUrl={recorder.videoUrl}
-          audioUrl={recorder.audioUrl}
-          videoMime={recorder.videoMime}
-          audioMime={recorder.audioMime}
+          videoUrl={uploadedVideo?.url ?? recorder.videoUrl}
+          audioUrl={uploadedVideo ? null : recorder.audioUrl}
+          videoMime={uploadedVideo?.mime ?? recorder.videoMime}
+          audioMime={uploadedVideo ? null : recorder.audioMime}
           durationSec={stoppedDurationSec || transcript?.duration || 0}
           feedback={feedback}
           modelLabel={modelLabel}
           generatedAt={generatedAt}
           stats={stoppedStats}
           transcript={transcript}
-          jdWasProvided={Boolean(prep.jd || prep.goal || prep.cvText || prep.prepText)}
+          rehearsalKind={prep.kind}
+          contextProvided={Boolean(prep.brief || prep.goal || prep.materialText)}
           onRetake={handleRetake}
           onCopyMarkdown={onCopyMarkdown}
         />
@@ -212,45 +297,20 @@ function Footer() {
   return (
     <footer className="mt-16 border-t border-[var(--color-ink-2)]">
       <div className="mx-auto max-w-[1240px] px-6 py-6 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--color-paper-3)]">
-        <span>The Rehearsal · Issue 01</span>
-        <span>On-device captions · cloud transcript &amp; analysis on stop</span>
+        <span>
+          The Rehearsal · by{" "}
+          <a
+            href="https://tinyorbit.ai"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[var(--color-paper-2)] hover:text-[var(--color-brass)] transition"
+          >
+            TinyOrbit
+          </a>
+        </span>
+        <span>On-device transcription · LLM analysis on stop</span>
       </div>
     </footer>
   );
 }
 
-function feedbackToMarkdown(
-  fb: Feedback,
-  modelLabel: string | null,
-  generatedAt: string | null,
-): string {
-  const lines: string[] = [];
-  lines.push(`# Delivery review`);
-  if (modelLabel || generatedAt) {
-    lines.push(
-      `_${modelLabel ?? ""}${modelLabel && generatedAt ? " · " : ""}${generatedAt ?? ""}_`,
-    );
-  }
-  lines.push(``);
-  lines.push(`**Score: ${fb.scoreOutOf10.toFixed(1)} / 10**`);
-  lines.push(``);
-  lines.push(fb.takeaway);
-  lines.push(``, `## Strengths`);
-  fb.strengths.forEach((s) => lines.push(`- ${s}`));
-  lines.push(``, `## Top three fixes`);
-  fb.topFixes.forEach((f, i) => {
-    lines.push(`${i + 1}. **${f.title}** — ${f.detail}`);
-  });
-  lines.push(``, `## Pace`, fb.paceFeedback);
-  lines.push(``, `## Filler words`, fb.fillerFeedback);
-  lines.push(``, `## Structure`, fb.structureFeedback);
-  if (fb.alignmentFeedback) lines.push(``, `## Alignment`, fb.alignmentFeedback);
-  lines.push(``, `## Rehearsal prompts`);
-  fb.rehearsalPrompts.forEach((p, i) => lines.push(`${i + 1}. ${p}`));
-  lines.push(``, `## Notable moments`);
-  fb.notableMoments.forEach((m) =>
-    lines.push(`- **${m.time}** _(${m.kind})_ — ${m.body}`),
-  );
-  lines.push(``, `STAR arc: ${fb.starArc} / 4`);
-  return lines.join("\n");
-}

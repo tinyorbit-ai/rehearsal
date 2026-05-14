@@ -5,16 +5,18 @@ import { feedbackSchema } from "@/lib/feedback-schema";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-type Segment = { start: number; end: number; text: string };
+export type Segment = { start: number; end: number; text: string };
 
-type AnalyzeBody = {
+export type RehearsalKind = "presentation" | "pitch" | "interview" | "other";
+
+export type AnalyzeBody = {
   transcript: string;
   segments?: Segment[];
   durationSec: number;
+  kind?: RehearsalKind;
   goal?: string;
-  jd?: string;
-  cvText?: string;
-  prepText?: string;
+  brief?: string;
+  materialText?: string;
   stats?: {
     wpm: number;
     fillerPct: number;
@@ -24,19 +26,28 @@ type AnalyzeBody = {
   model?: string;
 };
 
-function fmt(t: number) {
+const KIND_LABEL: Record<RehearsalKind, string> = {
+  presentation: "conference talk or presentation",
+  pitch: "sales pitch or product demo",
+  interview: "job interview answer",
+  other: "talk",
+};
+
+export function fmt(t: number) {
   const m = Math.floor(t / 60);
   const s = Math.floor(t % 60);
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
-function buildPrompt(body: AnalyzeBody): string {
+export function buildPrompt(body: AnalyzeBody): string {
+  const kind: RehearsalKind = body.kind ?? "other";
+  const kindLabel = KIND_LABEL[kind];
   const lines: string[] = [];
   lines.push(
-    "You are a senior interview coach reviewing a candidate's recorded answer.",
+    `You are a senior delivery coach reviewing a recorded rehearsal of a ${kindLabel}.`,
     "Your job: give specific, actionable feedback. Reference concrete moments.",
     "Be honest but generous. Praise what worked, then name the three biggest fixes.",
-    "Treat the candidate as a serious professional. No hedging, no padding.",
+    "Treat the speaker as a serious professional. No hedging, no padding.",
     "",
     `Recording duration: ${fmt(body.durationSec)} (${body.durationSec.toFixed(1)} seconds).`,
   );
@@ -45,11 +56,10 @@ function buildPrompt(body: AnalyzeBody): string {
       `Measured stats: pace ${body.stats.wpm} wpm, filler ratio ${body.stats.fillerPct}%, ${body.stats.longPauses} long pauses (longest ${body.stats.longestPauseSec.toFixed(1)}s).`,
     );
   }
-  if (body.goal) lines.push(`\nGoal stated by candidate:\n${body.goal}`);
-  if (body.jd) lines.push(`\nJob description:\n${body.jd}`);
-  if (body.cvText) lines.push(`\nCV / résumé:\n${body.cvText}`);
-  if (body.prepText)
-    lines.push(`\nPrep notes / talking points:\n${body.prepText}`);
+  if (body.goal) lines.push(`\nWhat the speaker is rehearsing for:\n${body.goal}`);
+  if (body.brief) lines.push(`\nBrief / context:\n${body.brief}`);
+  if (body.materialText)
+    lines.push(`\nSupporting material:\n${body.materialText}`);
 
   if (body.segments && body.segments.length) {
     lines.push("\nTranscript with timestamps:");
@@ -63,11 +73,13 @@ function buildPrompt(body: AnalyzeBody): string {
   lines.push(
     "",
     "Now produce feedback as a structured object matching the schema.",
-    "Score honestly: a generic answer with three filler clusters is a 6, not an 8.",
+    "Score honestly: a generic delivery with three filler clusters is a 6, not an 8.",
     "Reference specific timestamps and phrases from the transcript.",
-    "If goal/JD/CV/prep are missing, leave alignmentFeedback as an empty string.",
-    "STAR arc: count how many of (Situation, Task, Action, Result) the candidate delivered clearly.",
-    "JD keywords: only set if a JD was provided.",
+    "If goal/brief/material are all missing, leave alignmentFeedback as an empty string.",
+    kind === "interview"
+      ? "STAR arc: count how many of (Situation, Task, Action, Result) the speaker delivered clearly (0-4)."
+      : "STAR arc: set to null — this is not a job interview rehearsal.",
+    "Key terms: only set keyTermsHit/keyTermsTotal if a brief was provided; otherwise both null.",
   );
   return lines.join("\n");
 }

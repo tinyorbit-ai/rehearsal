@@ -2,23 +2,46 @@
 
 import { useState } from "react";
 
+export type RehearsalKind = "presentation" | "pitch" | "interview" | "other";
+
 export type Prep = {
+  kind: RehearsalKind;
   goal: string;
-  jd: string;
-  cvText: string;
-  cvName: string;
-  prepText: string;
-  prepName: string;
+  brief: string;
+  materialText: string;
+  materialName: string;
 };
 
 export const EMPTY_PREP: Prep = {
+  kind: "presentation",
   goal: "",
-  jd: "",
-  cvText: "",
-  cvName: "",
-  prepText: "",
-  prepName: "",
+  brief: "",
+  materialText: "",
+  materialName: "",
 };
+
+const KIND_OPTIONS: { value: RehearsalKind; label: string; hint: string }[] = [
+  {
+    value: "presentation",
+    label: "Conference / presentation",
+    hint: "Keynote, conference talk, internal presentation, all-hands.",
+  },
+  {
+    value: "pitch",
+    label: "Sales pitch / demo",
+    hint: "Customer pitch, investor pitch, product demo.",
+  },
+  {
+    value: "interview",
+    label: "Job interview",
+    hint: "STAR-style answer rehearsal.",
+  },
+  {
+    value: "other",
+    label: "Other",
+    hint: "Podcast, media, panel — anything else you need to deliver.",
+  },
+];
 
 export function Preparation({
   value,
@@ -32,6 +55,15 @@ export function Preparation({
   const set = <K extends keyof Prep>(k: K, v: Prep[K]) =>
     onChange({ ...value, [k]: v });
 
+  const goalPlaceholder =
+    value.kind === "interview"
+      ? "e.g. ‘Staff eng loop at Stripe’"
+      : value.kind === "pitch"
+        ? "e.g. ‘Series A pitch to Sequoia’"
+        : value.kind === "presentation"
+          ? "e.g. ‘Keynote at React Summit 2026’"
+          : "e.g. ‘Podcast interview with Acquired’";
+
   return (
     <section
       className={`border-t border-[var(--color-ink-2)] ${compact ? "opacity-60 pointer-events-none" : ""}`}
@@ -40,7 +72,7 @@ export function Preparation({
         <div className="flex items-baseline justify-between mb-5">
           <div>
             <h2 className="text-2xl font-semibold tracking-tight">
-              Preparation
+              What are you rehearsing for?
             </h2>
             <p className="text-sm text-[var(--color-paper-2)] mt-1">
               Optional. The more you give, the sharper the feedback.
@@ -50,51 +82,55 @@ export function Preparation({
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Goal" hint="One line. e.g. ‘Staff eng loop at Stripe’.">
+          <Field label="Rehearsal type" hint="Tunes the coaching style and structural framework.">
+            <select
+              value={value.kind}
+              onChange={(e) => set("kind", e.target.value as RehearsalKind)}
+              className="field w-full px-3 py-2.5 rounded-none font-sans text-sm"
+            >
+              {KIND_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Title" hint={KIND_OPTIONS.find((o) => o.value === value.kind)?.hint ?? ""}>
             <input
               type="text"
               value={value.goal}
               onChange={(e) => set("goal", e.target.value)}
-              placeholder="What are you rehearsing for?"
+              placeholder={goalPlaceholder}
               className="field w-full px-3 py-2.5 rounded-none font-sans text-sm"
             />
           </Field>
 
-          <Field label="Job description" hint="Paste the JD. Used for alignment scoring.">
+          <Field
+            label="Brief"
+            hint="Paste any context — audience, goals, key messages, JD, talk abstract. Used for alignment scoring."
+          >
             <textarea
               rows={3}
-              value={value.jd}
-              onChange={(e) => set("jd", e.target.value)}
-              placeholder="Paste the JD here…"
+              value={value.brief}
+              onChange={(e) => set("brief", e.target.value)}
+              placeholder="Audience, goals, key messages, JD, abstract…"
               className="field w-full px-3 py-2.5 rounded-none font-sans text-sm resize-y"
             />
           </Field>
 
           <Field
-            label="CV / résumé"
-            hint="PDF, Markdown, or plain text. Parsed once and held in memory."
+            label="Supporting material"
+            hint="Slides outline, talking points, brief, CV, prep notes — anything. PDF / Markdown / TXT."
           >
             <FileField
               accept=".pdf,.md,.txt"
-              fileName={value.cvName}
-              charCount={value.cvText.length}
-              onParsed={(text, name) => onChange({ ...value, cvText: text, cvName: name })}
-              onClear={() => onChange({ ...value, cvText: "", cvName: "" })}
-            />
-          </Field>
-
-          <Field
-            label="Prep doc"
-            hint="STAR stories, talking points, notes. We’ll check whether you hit them."
-          >
-            <FileField
-              accept=".pdf,.md,.txt"
-              fileName={value.prepName}
-              charCount={value.prepText.length}
+              fileName={value.materialName}
+              charCount={value.materialText.length}
               onParsed={(text, name) =>
-                onChange({ ...value, prepText: text, prepName: name })
+                onChange({ ...value, materialText: text, materialName: name })
               }
-              onClear={() => onChange({ ...value, prepText: "", prepName: "" })}
+              onClear={() => onChange({ ...value, materialText: "", materialName: "" })}
             />
           </Field>
         </div>

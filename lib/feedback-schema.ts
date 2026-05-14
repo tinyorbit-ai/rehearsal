@@ -41,12 +41,12 @@ export const feedbackSchema = z.object({
   structureFeedback: z
     .string()
     .describe(
-      "Arc evaluation — opening / middle / closing. STAR coverage if applicable.",
+      "Arc evaluation — opening / middle / closing. For talks: hook → premise → evidence → close. For interviews: STAR coverage.",
     ),
   alignmentFeedback: z
     .string()
     .describe(
-      "If JD/CV/goal provided: how well the answer matched. Empty string if no context provided.",
+      "If a brief/goal/material was provided: how well the delivery matched. Empty string if no context provided.",
     ),
   rehearsalPrompts: z
     .array(z.string())
@@ -68,25 +68,27 @@ export const feedbackSchema = z.object({
     )
     .min(3)
     .max(7),
+  // Nullable rather than optional — OpenAI structured outputs in strict
+  // mode require every property in `required`. Only set for interview
+  // rehearsals; null for talks/pitches/other.
   starArc: z
     .number()
     .min(0)
     .max(4)
+    .nullable()
     .describe(
-      "How many of Situation, Task, Action, Result were clearly delivered. 0-4.",
+      "Interview-only. How many of Situation, Task, Action, Result were clearly delivered. 0-4. null if rehearsal is not an interview.",
     ),
-  // Nullable rather than optional — OpenAI structured outputs in strict
-  // mode require every property in `required`. Set to null when no JD.
-  jdKeywordsHit: z
+  keyTermsHit: z
     .number()
     .min(0)
     .nullable()
-    .describe("Count of JD keywords actually used. null if no JD provided."),
-  jdKeywordsTotal: z
+    .describe("Count of brief key terms actually used. null if no brief provided."),
+  keyTermsTotal: z
     .number()
     .min(0)
     .nullable()
-    .describe("Total JD keywords looked for. null if no JD provided."),
+    .describe("Total brief key terms looked for. null if no brief provided."),
 });
 
 export type Feedback = z.infer<typeof feedbackSchema>;

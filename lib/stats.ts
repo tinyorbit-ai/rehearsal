@@ -40,7 +40,6 @@ export const EMPTY_STATS: StatsSnapshot = {
 const FILLER_PATTERNS: RegExp[] = [
   /\bum+\b/gi,
   /\buh+\b/gi,
-  /\bumm+\b/gi,
   /\bahh+\b/gi,
   /\blike\b/gi,
   /\bbasically\b/gi,
