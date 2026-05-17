@@ -172,6 +172,36 @@ component auto-hides the legend in that case.
 
 ## Gotchas (real ones, hit during build)
 
+- **Model files are served from our own R2 bucket, NOT huggingface.co.**
+  `env.remoteHost` in `lib/whisper.worker.ts` points at
+  `pub-…​.r2.dev` (bucket `rehearsal-models`, CF account
+  `06f19773f1bb9140a90893c4310cdbb5`). The bucket mirrors the exact HF
+  layout (`distil-whisper/distil-medium.en/resolve/main/…`) so
+  transformers.js's default path template just works. WHY this exists:
+  - **HF/CloudFront CORS poisoning.** HF serves model files via
+    CloudFront with `Vary: Origin` + a *conditional* ACAO (echoes the
+    request Origin, or `https://huggingface.co` when none). CloudFront's
+    Vary handling is unreliable, so the deployed `*.workers.dev` origin
+    intermittently gets a cached response with the wrong ACAO →
+    persistent "No 'Access-Control-Allow-Origin'". curl always works
+    (cache miss) → it's the CDN, not our code. Clearing browser cache
+    does nothing. A `?cache-bust` param did not reliably fix it.
+  - **Proxying through a CF Worker is dead.** OpenNext's streaming
+    layer truncates large bodies (~2–6 MB) regardless of cache
+    headers → the 1.17 GB encoder arrives corrupt → ONNX protobuf
+    parse failure. Confirmed by curl byte-count.
+  - **R2 public bucket is served by CF's storage edge, not the
+    Worker** → clean unconditional `ACAO: *`, no size cap, free egress.
+  - **Refreshing the mirror:** `wrangler r2 object put` is hard-capped
+    at 300 MiB, so the two big ONNX files (`encoder_model.onnx`
+    1.17 GB, `decoder_model_merged.onnx` 333 MiB) must go via S3
+    multipart: `aws s3 cp <file> s3://rehearsal-models/<key> --profile
+    r2 --endpoint-url https://06f19773f1bb9140a90893c4310cdbb5.r2.cloudflarestorage.com`.
+    The `r2` aws profile needs an R2 S3 API token (dashboard → R2 →
+    Manage R2 API Tokens; wrangler can't mint these). Metadata files
+    (<300 MiB) can use `wrangler r2 object put --remote`. Keys mirror
+    `distil-whisper/distil-medium.en/resolve/main/…`. Bucket CORS is
+    `ACAO:*` GET/HEAD (see `wrangler r2 bucket cors`).
 - **Cactus has no browser SDK and no documented Cloud HTTP transcription
   API.** Tried Groq for a post-stop cloud pass; abandoned it in favour
   of running `distil-medium.en` locally for both live captions and the

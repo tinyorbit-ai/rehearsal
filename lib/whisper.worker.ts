@@ -5,9 +5,28 @@ import { pipeline, env, type AutomaticSpeechRecognitionPipeline } from "@hugging
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 
-// distil-whisper/distil-medium.en — whisper-large-class accuracy, runs fully
-// on-device. ~400MB first load, cached after. WebGPU on M-series ≈ 4× realtime.
-// ONNX files live in the original repo; no Xenova/onnx-community fork needed.
+// Serve model files from our own R2 bucket instead of huggingface.co.
+// WHY: HF serves via CloudFront with `Vary: Origin` + a *conditional*
+// ACAO. CloudFront's Vary handling is unreliable, so the browser
+// intermittently gets a cached response with the wrong ACAO →
+// persistent "No 'Access-Control-Allow-Origin'" failures on the
+// deployed *.workers.dev origin (curl always works → CDN cache, not
+// our code). Proxying through a CF Worker was also dead: OpenNext's
+// streaming layer truncated the 1.17 GB encoder to a few MB → ONNX
+// protobuf parse failure. R2 public buckets are served by CF's
+// storage edge (NOT the Worker) with a clean unconditional
+// `Access-Control-Allow-Origin: *`, no size cap, free egress.
+//
+// The bucket mirrors the exact HF path layout, so transformers.js's
+// default remotePathTemplate (`{model}/resolve/{revision}/`) resolves
+// correctly: <R2>/distil-whisper/distil-medium.en/resolve/main/...
+// To refresh the mirror, re-run the upload (see CLAUDE.md gotchas).
+env.remoteHost = "https://pub-cc1859ad769246528ec45ebfee7bc518.r2.dev";
+
+// distil-whisper/distil-medium.en — whisper-large-class accuracy, runs
+// fully on-device. fp32 on WebGPU (encoder_model.onnx 1.17 GB +
+// decoder_model_merged.onnx 332 MB), cached by transformers.js after
+// first load. WASM fallback for browsers without WebGPU.
 const MODEL_ID = "distil-whisper/distil-medium.en";
 
 let transcriberPromise: Promise<AutomaticSpeechRecognitionPipeline> | null = null;

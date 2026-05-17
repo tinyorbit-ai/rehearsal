@@ -21,7 +21,13 @@ export function Masthead({ view }: { view: View }) {
             <div className="kicker flex items-center gap-3">
               <span>Delivery practice</span>
               <span className="h-px w-6 bg-[var(--color-paper-3)]/50" />
-              <span className="tnum">{issueDate}</span>
+              {/* Statically prerendered → server stamps the build date,
+                  client re-renders today's. They legitimately differ;
+                  suppressHydrationWarning keeps the client value without
+                  tripping React #418. */}
+              <span className="tnum" suppressHydrationWarning>
+                {issueDate}
+              </span>
             </div>
             <h1 className="mt-1 text-4xl md:text-5xl font-semibold tracking-tight leading-[1.05] text-[var(--color-paper)]">
               The Rehearsal
